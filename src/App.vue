@@ -1,6 +1,5 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { Bar, Doughnut } from 'vue-chartjs'
 import {
   Chart as ChartJS,
   ArcElement,
@@ -9,28 +8,16 @@ import {
   LinearScale,
   Tooltip,
 } from 'chart.js'
-import {
-  Activity,
-  ArrowDown,
-  BriefcaseBusiness,
-  CalendarDays,
-  Check,
-  ChevronDown,
-  CircleHelp,
-  Clock3,
-  FileClock,
-  LayoutDashboard,
-  LogOut,
-  Menu,
-  Plus,
-  RefreshCw,
-  Search,
-  Settings,
-  Users,
-  X,
-} from '@lucide/vue'
-import { eachDayOfInterval, format, startOfMonth,  startOfWeek,subDays } from 'date-fns'
+import { Check } from '@lucide/vue'
+import { eachDayOfInterval, format, startOfMonth, startOfWeek, subDays } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
+import TopBar from './components/TopBar.vue'
+import StatusBanners from './components/StatusBanners.vue'
+import FiltersBar from './components/FiltersBar.vue'
+import EntriesTable from './components/EntriesTable.vue'
+import ChartsSection from './components/ChartsSection.vue'
+import MetricsSection from './components/MetricsSection.vue'
+import WorklogModal from './components/WorklogModal.vue'
 
 ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip)
 
@@ -44,7 +31,6 @@ const error = ref('')
 const search = ref('')
 const selectedProject = ref('Todos os projetos')
 const selectedPerson = ref('Todas as pessoas')
-const mobileNav = ref(false)
 const showModal = ref(false)
 const saving = ref(false)
 const toast = ref('')
@@ -167,6 +153,30 @@ function setPeriod(days) {
   startDate.value = format(subDays(today, days - 1), 'yyyy-MM-dd')
 }
 
+function setThisWeek() {
+  startDate.value = format(startOfWeek(today), 'yyyy-MM-dd')
+}
+
+function setThisMonth() {
+  startDate.value = format(startOfMonth(today), 'yyyy-MM-dd')
+}
+
+function clearError() {
+  error.value = ''
+}
+
+function openModal() {
+  showModal.value = true
+}
+
+function closeModal() {
+  showModal.value = false
+}
+
+function updateWorklog(nextWorklog) {
+  worklog.value = nextWorklog
+}
+
 async function saveWorklog() {
   saving.value = true
   error.value = ''
@@ -199,96 +209,75 @@ watch([startDate, endDate], () => {
 })
 
 onMounted(() => {
-    setPeriod(1)
-    Promise.all([loadStatus(), loadDashboard()])
-
+  setPeriod(1)
+  Promise.all([loadStatus(), loadDashboard()])
 })
 </script>
 
 <template>
   <div class="app-shell">
     <main class="main">
-        <header class="topbar">
-        <div class="top-user">
-            <div class="avatar">
-                {{ status.user?.split(' ').map((part) => part[0]).slice(0, 2).join('') }}
-            </div>
-            <div>
-                <strong>{{ status.user }}</strong>
-                <span class="connection" :class="{ live: status.connected }"><i></i>{{ status.demo ? 'Dados de demonstracao' : status.connected ? 'Jira sincronizado' : 'Jira desconectado' }}</span>
-            </div>
-        </div>
-        <div class="top-actions">
-          <button class="primary-button" @click="showModal = true"><Plus :size="17" /> Novo apontamento</button>
-        </div>
-      </header>
+      <TopBar :status="status" @create-worklog="openModal" />
 
       <div class="content">
-        <div v-if="status.demo" class="demo-banner"><Activity :size="18" /><span><strong>Explorando com dados de exemplo.</strong> Adicione suas credenciais em <code>backend/.env</code> e defina <code>DEMO_MODE=false</code> para conectar o Jira.</span></div>
-        <div v-if="error" class="error-banner"><span>{{ error }}</span><button aria-label="Fechar erro" @click="error = ''"><X :size="17" /></button></div>
+        <StatusBanners :demo="status.demo" :error="error" @clear-error="clearError" />
 
-        <section class="filters" aria-label="Filtros do dashboard">
-          <div class="quick-period"><button @click="setPeriod(1)">Hoje</button><button @click="setPeriod(7)">7 dias</button><button @click="startDate = format(startOfWeek(today), 'yyyy-MM-dd')">Esta semana</button><button @click="setPeriod(30)">30 dias</button><button @click="startDate = format(startOfMonth(today), 'yyyy-MM-dd')">Este mês</button></div>
-          <label><CalendarDays :size="17" /><span>De</span><input v-model="startDate" type="date" /></label>
-          <span class="date-separator">ate</span>
-          <label><span class="sr-only">Ate</span><input v-model="endDate" type="date" /></label>
-          <label class="select-wrap"><BriefcaseBusiness :size="17" /><select v-model="selectedProject"><option>Todos os projetos</option><option v-for="project in projects" :key="project">{{ project }}</option></select><ChevronDown :size="15" /></label>
-        <button class="refresh-button" :disabled="loading" title="Atualizar dados" @click="loadDashboard"><RefreshCw :size="18" :class="{ spin: loading }" /> Atualizar</button>
-        </section>
+        <FiltersBar
+          v-model:start-date="startDate"
+          v-model:end-date="endDate"
+          v-model:selected-project="selectedProject"
+          :projects="projects"
+          :loading="loading"
+          @set-period="setPeriod"
+          @set-this-week="setThisWeek"
+          @set-this-month="setThisMonth"
+          @refresh="loadDashboard"
+        />
 
-        <section class="metric-grid">
-          <article class="metric"><div class="metric-icon blue"><Clock3 :size="20" /></div><div><span>Horas apontadas</span><strong>{{ hoursLabel(totalHours) }}</strong><small><b>+8,4%</b> vs. periodo anterior</small></div></article>
-          <article class="metric"><div class="metric-icon teal"><Check :size="20" /></div><div><span>Aproveitamento</span><strong>{{ utilization }}%</strong><small>{{ hoursLabel(expectedHours) }} previstas no periodo</small></div></article>
-          <article class="metric"><div class="metric-icon orange"><Activity :size="20" /></div><div><span>Media por dia</span><strong>{{ hoursLabel(averageHours) }}</strong><small>{{ businessDays }} dias uteis analisados</small></div></article>
-          <article class="metric"><div class="metric-icon yellow"><BriefcaseBusiness :size="20" /></div><div><span>Projetos ativos</span><strong>{{ projectTotals.length }}</strong><small>{{ people.length }} pessoas com registros</small></div></article>
-        </section>
+        <EntriesTable
+          v-model:search="search"
+          :filtered-entries="filteredEntries"
+          :loading="loading"
+          :date-label="dateLabel"
+          :hours-label="hoursLabel"
+        />
 
-        <section class="charts-grid">
-          <article class="panel daily-panel">
-            <div class="panel-head"><div><h2>Horas por dia</h2><p>Volume total de apontamentos no periodo</p></div><span class="panel-total">{{ hoursLabel(totalHours) }}</span></div>
-            <div class="bar-chart"><Bar v-if="!loading" :data="dailyChart" :options="barOptions" /><div v-else class="skeleton chart-skeleton"></div></div>
-          </article>
-          <article id="projetos" class="panel project-panel">
-            <div class="panel-head"><div><h2>Por projeto</h2><p>Distribuicao das horas</p></div></div>
-            <div class="project-chart-wrap">
-              <div class="doughnut"><Doughnut v-if="projectTotals.length" :data="projectChart" :options="doughnutOptions" /><div class="doughnut-label"><strong>{{ hoursLabel(totalHours) }}</strong><span>total</span></div></div>
-              <div class="legend"><div v-for="item in projectTotals" :key="item.name"><i :style="{ background: item.color }"></i><span>{{ item.name }}</span><strong>{{ hoursLabel(item.value) }}</strong></div></div>
-            </div>
-          </article>
-        </section>
+        <ChartsSection
+          :loading="loading"
+          :daily-chart="dailyChart"
+          :bar-options="barOptions"
+          :project-totals="projectTotals"
+          :project-chart="projectChart"
+          :doughnut-options="doughnutOptions"
+          :hours-label="hoursLabel"
+          :total-hours="totalHours"
+        />
 
-        <section id="apontamentos" class="panel table-panel">
-          <div class="panel-head table-head"><div><h2>Apontamentos recentes</h2><p>{{ filteredEntries.length }} registros encontrados</p></div><label class="search"><Search :size="17" /><input v-model="search" placeholder="Buscar issue, pessoa ou descricao" /></label></div>
-          <div class="table-scroll">
-            <table>
-              <thead><tr><th>Issue</th><th>Projeto</th><th>Responsavel</th><th>Data</th><th class="align-right">Tempo <ArrowDown :size="13" /></th></tr></thead>
-              <tbody>
-                <tr v-for="entry in filteredEntries.slice(0, 12)" :key="entry.id">
-                  <td><a href="#">{{ entry.issueKey }}</a><span>{{ entry.summary }}</span></td>
-                  <td><span class="project-name"><i :style="{ background: entry.projectColor }"></i>{{ entry.project }}</span></td>
-                  <td><span class="person"><b>{{ entry.initials }}</b>{{ entry.author }}</span></td>
-                  <td>{{ dateLabel(entry.date) }}</td>
-                  <td class="align-right"><strong>{{ hoursLabel(entry.hours) }}</strong></td>
-                </tr>
-                <tr v-if="!loading && !filteredEntries.length"><td colspan="5" class="empty-state">Nenhum apontamento encontrado para estes filtros.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <MetricsSection
+          :total-hours="totalHours"
+          :expected-hours="expectedHours"
+          :utilization="utilization"
+          :average-hours="averageHours"
+          :business-days="businessDays"
+          :project-count="projectTotals.length"
+          :people-count="people.length"
+          :hours-label="hoursLabel"
+        />
+
         <footer>Atualizado agora · Fonte: Jira Cloud</footer>
       </div>
     </main>
 
-    <div v-if="showModal" class="modal-backdrop" @mousedown.self="showModal = false">
-      <form class="modal" @submit.prevent="saveWorklog">
-        <div class="modal-head"><div><p class="eyebrow">JIRA WORKLOG</p><h2>Novo apontamento</h2></div><button type="button" aria-label="Fechar" @click="showModal = false"><X :size="20" /></button></div>
-        <label>Issue do Jira<input v-model="worklog.issue_key" required placeholder="Ex.: PLAT-142" /></label>
-        <div class="form-row"><label>Horas<input v-model.number="worklog.hours" required type="number" min="0.25" max="24" step="0.25" /></label><label>Data<input v-model="worklog.date" required type="date" /></label></div>
-        <label>Descricao<textarea v-model="worklog.comment" rows="4" placeholder="O que foi realizado?"></textarea></label>
-        <p v-if="status.demo" class="modal-note">O envio fica disponivel quando o Jira estiver conectado.</p>
-        <div class="modal-actions"><button type="button" class="secondary-button" @click="showModal = false">Cancelar</button><button class="primary-button" :disabled="saving || status.demo"><Clock3 :size="17" />{{ saving ? 'Registrando...' : 'Registrar horas' }}</button></div>
-      </form>
-    </div>
+    <WorklogModal
+      :show="showModal"
+      :saving="saving"
+      :status-demo="status.demo"
+      :worklog="worklog"
+      @close="closeModal"
+      @submit="saveWorklog"
+      @update:worklog="updateWorklog"
+    />
+
     <div v-if="toast" class="toast"><Check :size="18" />{{ toast }}</div>
   </div>
 </template>
