@@ -29,7 +29,7 @@ import {
   Users,
   X,
 } from '@lucide/vue'
-import { eachDayOfInterval, format, startOfMonth, subDays } from 'date-fns'
+import { eachDayOfInterval, format, startOfMonth,  startOfWeek,subDays } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 
 ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip)
@@ -72,7 +72,7 @@ const businessDays = computed(() => eachDayOfInterval({
   start: new Date(`${startDate.value}T12:00:00`),
   end: new Date(`${endDate.value}T12:00:00`),
 }).filter((day) => day.getDay() !== 0 && day.getDay() !== 6).length)
-const expectedHours = computed(() => businessDays.value * 8 * (selectedPerson.value === 'Todas as pessoas' ? people.value.length || 1 : 1))
+const expectedHours = computed(() => businessDays.value * 9 * (selectedPerson.value === 'Todas as pessoas' ? people.value.length || 1 : 1))
 const utilization = computed(() => expectedHours.value ? Math.round((totalHours.value / expectedHours.value) * 100) : 0)
 const averageHours = computed(() => businessDays.value ? totalHours.value / businessDays.value : 0)
 
@@ -198,37 +198,27 @@ watch([startDate, endDate], () => {
   debounce = window.setTimeout(loadDashboard, 250)
 })
 
-onMounted(() => Promise.all([loadStatus(), loadDashboard()]))
+onMounted(() => {
+    setPeriod(1)
+    Promise.all([loadStatus(), loadDashboard()])
+
+})
 </script>
 
 <template>
   <div class="app-shell">
-    <aside class="sidebar" :class="{ open: mobileNav }">
-      <div class="brand"><span class="brand-mark">T</span><span>tempo</span></div>
-      <button class="close-nav" aria-label="Fechar menu" @click="mobileNav = false"><X :size="20" /></button>
-      <nav>
-        <p class="nav-label">Workspace</p>
-        <a class="nav-item active" href="#"><LayoutDashboard :size="18" /> Visao geral</a>
-        <a class="nav-item" href="#apontamentos"><FileClock :size="18" /> Apontamentos</a>
-        <a class="nav-item" href="#projetos"><BriefcaseBusiness :size="18" /> Projetos</a>
-        <a class="nav-item" href="#equipe"><Users :size="18" /> Equipe</a>
-        <p class="nav-label nav-label-spaced">Sistema</p>
-        <a class="nav-item" href="#"><Settings :size="18" /> Configuracoes</a>
-        <a class="nav-item" href="#"><CircleHelp :size="18" /> Ajuda</a>
-      </nav>
-      <div class="sidebar-foot">
-        <div class="avatar">{{ status.user?.split(' ').map((part) => part[0]).slice(0, 2).join('') }}</div>
-        <div><strong>{{ status.user }}</strong><span>{{ status.connected ? 'Jira conectado' : 'Ambiente local' }}</span></div>
-        <LogOut :size="17" />
-      </div>
-    </aside>
-
     <main class="main">
-      <header class="topbar">
-        <button class="icon-button menu-button" aria-label="Abrir menu" @click="mobileNav = true"><Menu :size="21" /></button>
-        <div class="page-title"><span>Workspace</span><strong>Visao geral</strong></div>
+        <header class="topbar">
+        <div class="top-user">
+            <div class="avatar">
+                {{ status.user?.split(' ').map((part) => part[0]).slice(0, 2).join('') }}
+            </div>
+            <div>
+                <strong>{{ status.user }}</strong>
+                <span class="connection" :class="{ live: status.connected }"><i></i>{{ status.demo ? 'Dados de demonstracao' : status.connected ? 'Jira sincronizado' : 'Jira desconectado' }}</span>
+            </div>
+        </div>
         <div class="top-actions">
-          <span class="connection" :class="{ live: status.connected }"><i></i>{{ status.demo ? 'Dados de demonstracao' : status.connected ? 'Jira sincronizado' : 'Jira desconectado' }}</span>
           <button class="primary-button" @click="showModal = true"><Plus :size="17" /> Novo apontamento</button>
         </div>
       </header>
@@ -243,12 +233,12 @@ onMounted(() => Promise.all([loadStatus(), loadDashboard()]))
         <div v-if="error" class="error-banner"><span>{{ error }}</span><button aria-label="Fechar erro" @click="error = ''"><X :size="17" /></button></div>
 
         <section class="filters" aria-label="Filtros do dashboard">
-          <div class="quick-period"><button @click="setPeriod(7)">7 dias</button><button @click="setPeriod(30)">30 dias</button><button @click="startDate = format(startOfMonth(today), 'yyyy-MM-dd')">Este mes</button></div>
+          <div class="quick-period"><button @click="setPeriod(1)">Hoje</button><button @click="setPeriod(7)">7 dias</button><button @click="startDate = format(startOfWeek(today), 'yyyy-MM-dd')">Esta semana</button><button @click="setPeriod(30)">30 dias</button><button @click="startDate = format(startOfMonth(today), 'yyyy-MM-dd')">Este mês</button></div>
           <label><CalendarDays :size="17" /><span>De</span><input v-model="startDate" type="date" /></label>
           <span class="date-separator">ate</span>
           <label><span class="sr-only">Ate</span><input v-model="endDate" type="date" /></label>
           <label class="select-wrap"><BriefcaseBusiness :size="17" /><select v-model="selectedProject"><option>Todos os projetos</option><option v-for="project in projects" :key="project">{{ project }}</option></select><ChevronDown :size="15" /></label>
-          <label class="select-wrap"><Users :size="17" /><select v-model="selectedPerson"><option>Todas as pessoas</option><option v-for="person in people" :key="person">{{ person }}</option></select><ChevronDown :size="15" /></label>
+          <!-- <label class="select-wrap"><Users :size="17" /><select v-model="selectedPerson"><option>Todas as pessoas</option><option v-for="person in people" :key="person">{{ person }}</option></select><ChevronDown :size="15" /></label> -->
         </section>
 
         <section class="metric-grid">

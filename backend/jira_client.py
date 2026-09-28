@@ -40,7 +40,11 @@ class JiraClient:
     async def issues_with_worklogs(
         self, start_date: date, end_date: date, project: str | None = None
     ) -> list[dict[str, Any]]:
-        filters = [f'worklogDate >= "{start_date}"', f'worklogDate <= "{end_date}"']
+        filters = [
+            f'worklogDate >= "{start_date}"',
+            f'worklogDate <= "{end_date}"',
+            "worklogAuthor = currentUser()",
+        ]
         if project:
             safe_project = project.replace('"', '\\"')
             filters.append(f'project = "{safe_project}"')

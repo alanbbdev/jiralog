@@ -94,7 +94,6 @@ async def dashboard(
     start: date = Query(),
     end: date = Query(),
     project: str | None = Query(default=None),
-    account_id: str | None = Query(default=None),
 ) -> dict[str, Any]:
     if start > end or (end - start).days > 92:
         raise HTTPException(400, "O periodo deve ter no maximo 93 dias.")
@@ -104,6 +103,8 @@ async def dashboard(
         return {**dashboard_data(start, end), "demo": True}
 
     try:
+        me = await client.current_user()
+        my_account_id = me["accountId"]
         issues = await client.issues_with_worklogs(start, end, project)
         worklog_groups = await asyncio.gather(
             *(client.issue_worklogs(issue["key"]) for issue in issues)
@@ -115,9 +116,9 @@ async def dashboard(
             for worklog in worklogs:
                 worklog_date = date.fromisoformat(worklog["started"][:10])
                 author = worklog.get("author", {})
-                if not start <= worklog_date <= end:
+                if author.get("accountId") != my_account_id:
                     continue
-                if account_id and author.get("accountId") != account_id:
+                if not start <= worklog_date <= end:
                     continue
                 display_name = author.get("displayName", "Usuario Jira")
                 entries.append(
