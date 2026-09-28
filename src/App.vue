@@ -18,6 +18,7 @@ import EntriesTable from './components/EntriesTable.vue'
 import ChartsSection from './components/ChartsSection.vue'
 import MetricsSection from './components/MetricsSection.vue'
 import WorklogModal from './components/WorklogModal.vue'
+import ReportSection from './components/ReportSection.vue'
 
 ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip)
 
@@ -29,6 +30,7 @@ const status = ref({ connected: false, demo: true, user: 'Carregando...' })
 const loading = ref(true)
 const error = ref('')
 const search = ref('')
+const currentView = ref('dashboard')
 const selectedProject = ref('Todos os projetos')
 const selectedPerson = ref('Todas as pessoas')
 const showModal = ref(false)
@@ -68,7 +70,7 @@ const dailyChart = computed(() => {
   const days = eachDayOfInterval({
     start: new Date(`${startDate.value}T12:00:00`),
     end: new Date(`${endDate.value}T12:00:00`),
-  })
+  }).filter((day) => day.getDay() !== 0 && day.getDay() !== 6)
   return {
     labels: days.map((day) => format(day, 'dd/MM')),
     datasets: [{
@@ -165,6 +167,10 @@ function clearError() {
   error.value = ''
 }
 
+function changeView(nextView) {
+  currentView.value = nextView
+}
+
 function openModal() {
   showModal.value = true
 }
@@ -217,7 +223,7 @@ onMounted(() => {
 <template>
   <div class="app-shell">
     <main class="main">
-      <TopBar :status="status" @create-worklog="openModal" />
+      <TopBar :status="status" :current-view="currentView" @create-worklog="openModal" @change-view="changeView" />
 
       <div class="content">
         <StatusBanners :demo="status.demo" :error="error" @clear-error="clearError" />
@@ -234,26 +240,33 @@ onMounted(() => {
           @refresh="loadDashboard"
         />
 
-        <EntriesTable
-          v-model:search="search"
-          :filtered-entries="filteredEntries"
-          :loading="loading"
-          :date-label="dateLabel"
-          :hours-label="hoursLabel"
-        />
+        <div v-if="currentView === 'dashboard'" class="grid">
+            <div class="grid-item">
+                <EntriesTable
+                v-model:search="search"
+                :filtered-entries="filteredEntries"
+                :loading="loading"
+                :date-label="dateLabel"
+                :hours-label="hoursLabel"
+                />
+            </div>
+            <div class="grid-item">
+                <ChartsSection
+                singleColumn
+                :loading="loading"
+                :daily-chart="dailyChart"
+                :bar-options="barOptions"
+                :project-totals="projectTotals"
+                :project-chart="projectChart"
+                :doughnut-options="doughnutOptions"
+                :hours-label="hoursLabel"
+                :total-hours="totalHours"
+                />
+            </div>
 
-        <ChartsSection
-          :loading="loading"
-          :daily-chart="dailyChart"
-          :bar-options="barOptions"
-          :project-totals="projectTotals"
-          :project-chart="projectChart"
-          :doughnut-options="doughnutOptions"
-          :hours-label="hoursLabel"
-          :total-hours="totalHours"
-        />
-
+        </div>
         <MetricsSection
+          v-if="currentView === 'dashboard'"
           :total-hours="totalHours"
           :expected-hours="expectedHours"
           :utilization="utilization"
@@ -262,6 +275,14 @@ onMounted(() => {
           :project-count="projectTotals.length"
           :people-count="people.length"
           :hours-label="hoursLabel"
+        />
+
+        <ReportSection
+          v-if="currentView === 'report'"
+          :entries="filteredEntries"
+          :start-date="startDate"
+          :end-date="endDate"
+          :loading="loading"
         />
 
         <footer>Atualizado agora · Fonte: Jira Cloud</footer>

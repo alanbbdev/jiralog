@@ -50,8 +50,6 @@ const emit = defineEmits(['update:search'])
         <thead>
           <tr>
             <th>Issue</th>
-            <th>Projeto</th>
-            <th>Responsavel</th>
             <th>Data</th>
             <th class="align-right">
               Tempo
@@ -66,24 +64,12 @@ const emit = defineEmits(['update:search'])
               <a href="#">{{ entry.issueKey }}</a>
               <span>{{ entry.summary }}</span>
             </td>
-            <td>
-              <span class="project-name">
-                <i :style="{ background: entry.projectColor }"></i>
-                {{ entry.project }}
-              </span>
-            </td>
-            <td>
-              <span class="person">
-                <b>{{ entry.initials }}</b>
-                {{ entry.author }}
-              </span>
-            </td>
             <td>{{ props.dateLabel(entry.date) }}</td>
             <td class="align-right"><strong>{{ props.hoursLabel(entry.hours) }}</strong></td>
           </tr>
 
           <tr v-if="!props.loading && !props.filteredEntries.length">
-            <td colspan="5" class="empty-state">Nenhum apontamento encontrado para estes filtros.</td>
+            <td colspan="3" class="empty-state">Nenhum apontamento encontrado para estes filtros.</td>
           </tr>
         </tbody>
       </table>

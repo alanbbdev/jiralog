@@ -120,6 +120,8 @@ async def dashboard(
                     continue
                 if not start <= worklog_date <= end:
                     continue
+                if worklog_date.weekday() >= 5:
+                    continue
                 display_name = author.get("displayName", "Usuario Jira")
                 entries.append(
                     {

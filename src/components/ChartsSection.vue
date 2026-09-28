@@ -34,11 +34,15 @@ const props = defineProps({
     type: Number,
     required: true,
   },
+  singleColumn :{
+    type: Boolean,
+    default: false
+  }
 })
 </script>
 
 <template>
-  <section class="charts-grid">
+  <section :class="props.singleColumn ? 'charts-grid': 'grid'">
     <article class="panel daily-panel">
       <div class="panel-head">
         <div>
