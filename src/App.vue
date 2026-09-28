@@ -20,6 +20,7 @@ import {
   Clock3,
   FileClock,
   LayoutDashboard,
+  Lock,
   LogOut,
   Menu,
   Plus,
@@ -34,21 +35,30 @@ import { ptBR } from 'date-fns/locale'
 
 ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip)
 
+const CREDENTIALS_STORAGE_KEY = 'timelog.jira.credentials.v1'
+const PBKDF2_ITERATIONS = 210000
+
 const today = new Date()
 const startDate = ref(format(startOfMonth(today), 'yyyy-MM-dd'))
 const endDate = ref(format(today, 'yyyy-MM-dd'))
 const entries = ref([])
-const status = ref({ connected: false, demo: true, user: 'Carregando...' })
+const status = ref({ connected: false, demo: true, user: 'Nao conectado' })
 const loading = ref(true)
 const error = ref('')
 const search = ref('')
 const selectedProject = ref('Todos os projetos')
 const selectedPerson = ref('Todas as pessoas')
-const mobileNav = ref(false)
 const showModal = ref(false)
+const showCredentialsModal = ref(false)
 const saving = ref(false)
 const toast = ref('')
 const worklog = ref({ issue_key: '', hours: 1, date: format(today, 'yyyy-MM-dd'), comment: '' })
+const encryptedSessionExists = ref(false)
+const unlockPassphrase = ref('')
+const unlocking = ref(false)
+const credentialsForm = ref({ baseUrl: '', email: '', apiToken: '', passphrase: '' })
+const savingCredentials = ref(false)
+const jiraCredentials = ref(null)
 
 const hours = (seconds) => seconds / 3600
 const hoursLabel = (value) => `${value.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}h`
@@ -131,34 +141,314 @@ const doughnutOptions = {
   plugins: { legend: { display: false } },
 }
 
-async function api(path, options) {
-  const response = await fetch(path, options)
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new Error(body.detail || 'Nao foi possivel concluir a operacao.')
+function projectColor(projectName) {
+  const colors = ['#2563eb', '#14b8a6', '#f97316', '#eab308', '#db2777']
+  return colors[[...projectName].reduce((sum, char) => sum + char.charCodeAt(0), 0) % colors.length]
+}
+
+function plainText(value) {
+  if (typeof value === 'string') return value
+  if (!value || typeof value !== 'object') return ''
+  const texts = []
+  for (const node of value.content || []) {
+    if (!node || typeof node !== 'object') continue
+    if (typeof node.text === 'string') texts.push(node.text)
+    const nested = plainText(node)
+    if (nested) texts.push(nested)
   }
-  return response.json()
+  return texts.join(' ').trim()
+}
+
+function toBase64(bytes) {
+  let binary = ''
+  bytes.forEach((value) => {
+    binary += String.fromCharCode(value)
+  })
+  return btoa(binary)
+}
+
+function fromBase64(value) {
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
+async function deriveKey(passphrase, saltBytes) {
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
+  )
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: saltBytes, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  )
+}
+
+async function encryptCredentials(credentials, passphrase) {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const key = await deriveKey(passphrase, salt)
+  const payload = new TextEncoder().encode(JSON.stringify(credentials))
+  const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, payload)
+  return {
+    version: 1,
+    iv: toBase64(iv),
+    salt: toBase64(salt),
+    cipher: toBase64(new Uint8Array(cipher)),
+    iterations: PBKDF2_ITERATIONS,
+  }
+}
+
+async function decryptCredentials(record, passphrase) {
+  const iv = fromBase64(record.iv)
+  const salt = fromBase64(record.salt)
+  const key = await deriveKey(passphrase, salt)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, fromBase64(record.cipher))
+  return JSON.parse(new TextDecoder().decode(decrypted))
+}
+
+function readEncryptedSession() {
+  try {
+    const raw = sessionStorage.getItem(CREDENTIALS_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function clearSessionCredentials() {
+  sessionStorage.removeItem(CREDENTIALS_STORAGE_KEY)
+  encryptedSessionExists.value = false
+  jiraCredentials.value = null
+  status.value = { connected: false, demo: true, user: 'Nao conectado' }
+  entries.value = []
+  toast.value = 'Credenciais removidas da sessao.'
+  window.setTimeout(() => { toast.value = '' }, 3000)
+}
+
+async function saveCredentials() {
+  if (!credentialsForm.value.baseUrl || !credentialsForm.value.email || !credentialsForm.value.apiToken) {
+    error.value = 'Preencha URL, e-mail e API token do Jira.'
+    return
+  }
+  if (credentialsForm.value.passphrase.length < 8) {
+    error.value = 'Use uma senha da sessao com pelo menos 8 caracteres.'
+    return
+  }
+
+  savingCredentials.value = true
+  error.value = ''
+  try {
+    const normalized = {
+      baseUrl: credentialsForm.value.baseUrl.trim().replace(/\/$/, ''),
+      email: credentialsForm.value.email.trim(),
+      apiToken: credentialsForm.value.apiToken.trim(),
+    }
+    const encrypted = await encryptCredentials(normalized, credentialsForm.value.passphrase)
+    sessionStorage.setItem(CREDENTIALS_STORAGE_KEY, JSON.stringify(encrypted))
+    jiraCredentials.value = normalized
+    encryptedSessionExists.value = true
+    credentialsForm.value.passphrase = ''
+    showCredentialsModal.value = false
+    toast.value = 'Credenciais salvas com criptografia na sessao.'
+    window.setTimeout(() => { toast.value = '' }, 3500)
+    await Promise.all([loadStatus(), loadDashboard()])
+  } catch {
+    error.value = 'Nao foi possivel criptografar as credenciais nesta sessao.'
+  } finally {
+    savingCredentials.value = false
+  }
+}
+
+async function unlockCredentials() {
+  const record = readEncryptedSession()
+  if (!record) {
+    encryptedSessionExists.value = false
+    error.value = 'Nenhuma sessao criptografada foi encontrada.'
+    return
+  }
+  if (!unlockPassphrase.value) {
+    error.value = 'Informe a senha da sessao para desbloquear.'
+    return
+  }
+
+  unlocking.value = true
+  error.value = ''
+  try {
+    jiraCredentials.value = await decryptCredentials(record, unlockPassphrase.value)
+    unlockPassphrase.value = ''
+    toast.value = 'Sessao desbloqueada.'
+    window.setTimeout(() => { toast.value = '' }, 3000)
+    await Promise.all([loadStatus(), loadDashboard()])
+  } catch {
+    error.value = 'Senha invalida ou dados de sessao corrompidos.'
+  } finally {
+    unlocking.value = false
+  }
+}
+
+function connectionLabel() {
+  if (status.value.connected) return 'Jira conectado no navegador'
+  if (encryptedSessionExists.value) return 'Sessao bloqueada'
+  return 'Credenciais nao configuradas'
+}
+
+function authHeader() {
+  if (!jiraCredentials.value) {
+    throw new Error('Configure as credenciais do Jira para continuar.')
+  }
+  return `Basic ${btoa(`${jiraCredentials.value.email}:${jiraCredentials.value.apiToken}`)}`
+}
+
+async function jiraApi(path, options = {}) {
+  const baseUrl = jiraCredentials.value?.baseUrl
+  if (!baseUrl) throw new Error('Configure as credenciais do Jira para continuar.')
+
+  const headers = new Headers(options.headers || {})
+  headers.set('Accept', 'application/json')
+  headers.set('Authorization', authHeader())
+  if (options.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
+  let response
+  try {
+    response = await fetch(`${baseUrl}${path}`, { ...options, headers })
+  } catch {
+    throw new Error('Falha ao conectar com Jira. Verifique URL e CORS do navegador.')
+  }
+
+  if (!response.ok) {
+    let detail = 'Nao foi possivel concluir a operacao no Jira.'
+    try {
+      const body = await response.json()
+      detail = body.errorMessages?.[0] || body.errors?.[Object.keys(body.errors || {})[0]] || detail
+    } catch {
+      detail = response.statusText || detail
+    }
+    throw new Error(detail)
+  }
+
+  return response.status === 204 ? {} : response.json()
+}
+
+async function issuesWithWorklogs(start, end, project) {
+  const filters = [
+    `worklogDate >= "${start}"`,
+    `worklogDate <= "${end}"`,
+    'worklogAuthor = currentUser()',
+  ]
+  if (project && project !== 'Todos os projetos') {
+    filters.push(`project = "${project.replaceAll('"', '\\"')}"`)
+  }
+
+  const issues = []
+  let nextPageToken
+  while (true) {
+    const params = new URLSearchParams({
+      jql: `${filters.join(' AND ')} ORDER BY updated DESC`,
+      fields: 'summary,project,issuetype,status',
+      maxResults: '100',
+    })
+    if (nextPageToken) params.set('nextPageToken', nextPageToken)
+    const page = await jiraApi(`/rest/api/3/search/jql?${params.toString()}`)
+    issues.push(...(page.issues || []))
+    nextPageToken = page.nextPageToken
+    if (page.isLast || !nextPageToken) break
+  }
+  return issues
+}
+
+async function issueWorklogs(issueKey) {
+  const worklogs = []
+  let startAt = 0
+  while (true) {
+    const params = new URLSearchParams({ startAt: String(startAt), maxResults: '100' })
+    const page = await jiraApi(`/rest/api/3/issue/${issueKey}/worklog?${params.toString()}`)
+    worklogs.push(...(page.worklogs || []))
+    startAt += (page.worklogs || []).length
+    if (startAt >= (page.total || 0)) break
+  }
+  return worklogs
 }
 
 async function loadDashboard() {
+  if (!jiraCredentials.value) {
+    loading.value = false
+    entries.value = []
+    return
+  }
+
   loading.value = true
   error.value = ''
   try {
-    const params = new URLSearchParams({ start: startDate.value, end: endDate.value })
-    const result = await api(`/api/dashboard?${params}`)
-    entries.value = result.entries
+    const me = await jiraApi('/rest/api/3/myself')
+    status.value = { connected: true, demo: false, user: me.displayName || me.emailAddress || 'Usuario Jira' }
+    const issues = await issuesWithWorklogs(startDate.value, endDate.value, selectedProject.value)
+    const worklogGroups = await Promise.all(issues.map((issue) => issueWorklogs(issue.key)))
+
+    const normalized = []
+    issues.forEach((issue, index) => {
+      const fields = issue.fields || {}
+      const projectName = fields.project?.name || 'Sem projeto'
+      const logs = worklogGroups[index] || []
+
+      logs.forEach((worklog) => {
+        const worklogDate = (worklog.started || '').slice(0, 10)
+        if (worklog.author?.accountId !== me.accountId) return
+        if (worklogDate < startDate.value || worklogDate > endDate.value) return
+
+        const displayName = worklog.author?.displayName || 'Usuario Jira'
+        normalized.push({
+          id: worklog.id,
+          issueKey: issue.key,
+          summary: fields.summary || 'Sem titulo',
+          project: projectName,
+          projectColor: projectColor(projectName),
+          author: displayName,
+          initials: displayName.split(' ').slice(0, 2).map((part) => part[0]).join('').toUpperCase(),
+          date: worklogDate,
+          seconds: worklog.timeSpentSeconds,
+          hours: Number((worklog.timeSpentSeconds / 3600).toFixed(2)),
+          comment: plainText(worklog.comment) || 'Sem comentario',
+        })
+      })
+    })
+
+    entries.value = normalized.sort((a, b) => b.date.localeCompare(a.date))
   } catch (requestError) {
     error.value = requestError.message
+    status.value = { connected: false, demo: true, user: 'Nao conectado' }
   } finally {
     loading.value = false
   }
 }
 
 async function loadStatus() {
+  if (!jiraCredentials.value) {
+    status.value = {
+      connected: false,
+      demo: true,
+      user: encryptedSessionExists.value ? 'Sessao protegida' : 'Nao conectado',
+    }
+    return
+  }
+
   try {
-    status.value = await api('/api/status')
+    const me = await jiraApi('/rest/api/3/myself')
+    status.value = { connected: true, demo: false, user: me.displayName || me.emailAddress || 'Usuario Jira' }
   } catch (requestError) {
-    status.value = { connected: false, demo: false, user: 'API indisponivel' }
+    status.value = { connected: false, demo: true, user: 'Nao conectado' }
+    error.value = requestError.message
   }
 }
 
@@ -168,18 +458,28 @@ function setPeriod(days) {
 }
 
 async function saveWorklog() {
+  if (!jiraCredentials.value) {
+    error.value = 'Configure as credenciais do Jira para registrar horas.'
+    return
+  }
+
   saving.value = true
   error.value = ''
   try {
-    await api('/api/worklogs', {
+    const payload = {
+      timeSpentSeconds: Math.round(Number(worklog.value.hours) * 3600),
+      started: `${worklog.value.date}T09:00:00.000-0300`,
+    }
+    if (worklog.value.comment?.trim()) {
+      payload.comment = {
+        type: 'doc',
+        version: 1,
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: worklog.value.comment.trim() }] }],
+      }
+    }
+    await jiraApi(`/rest/api/3/issue/${worklog.value.issue_key.toUpperCase()}/worklog`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        issue_key: worklog.value.issue_key,
-        seconds: Math.round(Number(worklog.value.hours) * 3600),
-        started: `${worklog.value.date}T09:00:00-03:00`,
-        comment: worklog.value.comment,
-      }),
+      body: JSON.stringify(payload),
     })
     showModal.value = false
     toast.value = 'Apontamento registrado no Jira.'
@@ -193,15 +493,15 @@ async function saveWorklog() {
 }
 
 let debounce
-watch([startDate, endDate], () => {
+watch([startDate, endDate, selectedProject], () => {
   clearTimeout(debounce)
   debounce = window.setTimeout(loadDashboard, 250)
 })
 
 onMounted(() => {
-    setPeriod(1)
-    Promise.all([loadStatus(), loadDashboard()])
-
+  setPeriod(1)
+  encryptedSessionExists.value = Boolean(readEncryptedSession())
+  loadStatus()
 })
 </script>
 
@@ -215,16 +515,25 @@ onMounted(() => {
             </div>
             <div>
                 <strong>{{ status.user }}</strong>
-                <span class="connection" :class="{ live: status.connected }"><i></i>{{ status.demo ? 'Dados de demonstracao' : status.connected ? 'Jira sincronizado' : 'Jira desconectado' }}</span>
+                  <span class="connection" :class="{ live: status.connected }"><i></i>{{ connectionLabel() }}</span>
             </div>
         </div>
         <div class="top-actions">
-          <button class="primary-button" @click="showModal = true"><Plus :size="17" /> Novo apontamento</button>
+            <button class="secondary-button" @click="showCredentialsModal = true"><Settings :size="16" /> Credenciais Jira</button>
+            <button class="primary-button" :disabled="!status.connected" @click="showModal = true"><Plus :size="17" /> Novo apontamento</button>
         </div>
       </header>
 
       <div class="content">
-        <div v-if="status.demo" class="demo-banner"><Activity :size="18" /><span><strong>Explorando com dados de exemplo.</strong> Adicione suas credenciais em <code>backend/.env</code> e defina <code>DEMO_MODE=false</code> para conectar o Jira.</span></div>
+          <div v-if="!status.connected" class="demo-banner"><Activity :size="18" /><span><strong>Modo frontend-only ativo.</strong> Configure suas credenciais do Jira para consultar e registrar apontamentos direto do navegador.</span></div>
+          <div v-if="encryptedSessionExists && !jiraCredentials" class="demo-banner">
+            <Lock :size="18" />
+            <span><strong>Sessao criptografada encontrada.</strong> Digite a senha para desbloquear sem reenviar token.</span>
+            <div class="unlock-wrap">
+              <input v-model="unlockPassphrase" type="password" placeholder="Senha da sessao" />
+              <button class="secondary-button" :disabled="unlocking" @click="unlockCredentials">{{ unlocking ? 'Desbloqueando...' : 'Desbloquear' }}</button>
+            </div>
+          </div>
         <div v-if="error" class="error-banner"><span>{{ error }}</span><button aria-label="Fechar erro" @click="error = ''"><X :size="17" /></button></div>
 
         <section class="filters" aria-label="Filtros do dashboard">
@@ -233,7 +542,7 @@ onMounted(() => {
           <span class="date-separator">ate</span>
           <label><span class="sr-only">Ate</span><input v-model="endDate" type="date" /></label>
           <label class="select-wrap"><BriefcaseBusiness :size="17" /><select v-model="selectedProject"><option>Todos os projetos</option><option v-for="project in projects" :key="project">{{ project }}</option></select><ChevronDown :size="15" /></label>
-        <button class="refresh-button" :disabled="loading" title="Atualizar dados" @click="loadDashboard"><RefreshCw :size="18" :class="{ spin: loading }" /> Atualizar</button>
+        <button class="refresh-button" :disabled="loading || !status.connected" title="Atualizar dados" @click="loadDashboard"><RefreshCw :size="18" :class="{ spin: loading }" /> Atualizar</button>
         </section>
 
         <section class="metric-grid">
@@ -275,9 +584,25 @@ onMounted(() => {
             </table>
           </div>
         </section>
-        <footer>Atualizado agora · Fonte: Jira Cloud</footer>
+        <footer>Atualizado agora · Fonte: Jira Cloud (browser)</footer>
       </div>
     </main>
+
+    <div v-if="showCredentialsModal" class="modal-backdrop" @mousedown.self="showCredentialsModal = false">
+      <form class="modal" @submit.prevent="saveCredentials">
+        <div class="modal-head"><div><p class="eyebrow">CONFIGURACAO</p><h2>Credenciais Jira</h2></div><button type="button" aria-label="Fechar" @click="showCredentialsModal = false"><X :size="20" /></button></div>
+        <label>Base URL do Jira<input v-model="credentialsForm.baseUrl" required placeholder="https://suaempresa.atlassian.net" /></label>
+        <label>E-mail<input v-model="credentialsForm.email" required type="email" placeholder="voce@empresa.com" /></label>
+        <label>API Token<input v-model="credentialsForm.apiToken" required type="password" placeholder="Token gerado no Atlassian" /></label>
+        <label>Senha da sessao (criptografia)<input v-model="credentialsForm.passphrase" required type="password" minlength="8" placeholder="Minimo 8 caracteres" /></label>
+        <p class="modal-note">As credenciais sao criptografadas com AES-GCM e salvas apenas no sessionStorage desta aba.</p>
+        <div class="modal-actions">
+          <button v-if="encryptedSessionExists" type="button" class="secondary-button" @click="clearSessionCredentials">Limpar sessao</button>
+          <button type="button" class="secondary-button" @click="showCredentialsModal = false">Cancelar</button>
+          <button class="primary-button" :disabled="savingCredentials"><Check :size="17" />{{ savingCredentials ? 'Salvando...' : 'Salvar credenciais' }}</button>
+        </div>
+      </form>
+    </div>
 
     <div v-if="showModal" class="modal-backdrop" @mousedown.self="showModal = false">
       <form class="modal" @submit.prevent="saveWorklog">
@@ -285,8 +610,8 @@ onMounted(() => {
         <label>Issue do Jira<input v-model="worklog.issue_key" required placeholder="Ex.: PLAT-142" /></label>
         <div class="form-row"><label>Horas<input v-model.number="worklog.hours" required type="number" min="0.25" max="24" step="0.25" /></label><label>Data<input v-model="worklog.date" required type="date" /></label></div>
         <label>Descricao<textarea v-model="worklog.comment" rows="4" placeholder="O que foi realizado?"></textarea></label>
-        <p v-if="status.demo" class="modal-note">O envio fica disponivel quando o Jira estiver conectado.</p>
-        <div class="modal-actions"><button type="button" class="secondary-button" @click="showModal = false">Cancelar</button><button class="primary-button" :disabled="saving || status.demo"><Clock3 :size="17" />{{ saving ? 'Registrando...' : 'Registrar horas' }}</button></div>
+        <p v-if="!status.connected" class="modal-note">Conecte o Jira no modal de credenciais para habilitar o envio.</p>
+        <div class="modal-actions"><button type="button" class="secondary-button" @click="showModal = false">Cancelar</button><button class="primary-button" :disabled="saving || !status.connected"><Clock3 :size="17" />{{ saving ? 'Registrando...' : 'Registrar horas' }}</button></div>
       </form>
     </div>
     <div v-if="toast" class="toast"><Check :size="18" />{{ toast }}</div>
