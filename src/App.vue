@@ -224,11 +224,6 @@ onMounted(() => {
       </header>
 
       <div class="content">
-        <section class="heading-row">
-          <div><p class="eyebrow">PAINEL DE HORAS</p><h1>Como o tempo esta sendo investido?</h1><p>Acompanhe o ritmo da equipe e mantenha os apontamentos em dia.</p></div>
-          <button class="refresh-button" :disabled="loading" title="Atualizar dados" @click="loadDashboard"><RefreshCw :size="18" :class="{ spin: loading }" /> Atualizar</button>
-        </section>
-
         <div v-if="status.demo" class="demo-banner"><Activity :size="18" /><span><strong>Explorando com dados de exemplo.</strong> Adicione suas credenciais em <code>backend/.env</code> e defina <code>DEMO_MODE=false</code> para conectar o Jira.</span></div>
         <div v-if="error" class="error-banner"><span>{{ error }}</span><button aria-label="Fechar erro" @click="error = ''"><X :size="17" /></button></div>
 
@@ -238,7 +233,7 @@ onMounted(() => {
           <span class="date-separator">ate</span>
           <label><span class="sr-only">Ate</span><input v-model="endDate" type="date" /></label>
           <label class="select-wrap"><BriefcaseBusiness :size="17" /><select v-model="selectedProject"><option>Todos os projetos</option><option v-for="project in projects" :key="project">{{ project }}</option></select><ChevronDown :size="15" /></label>
-          <!-- <label class="select-wrap"><Users :size="17" /><select v-model="selectedPerson"><option>Todas as pessoas</option><option v-for="person in people" :key="person">{{ person }}</option></select><ChevronDown :size="15" /></label> -->
+        <button class="refresh-button" :disabled="loading" title="Atualizar dados" @click="loadDashboard"><RefreshCw :size="18" :class="{ spin: loading }" /> Atualizar</button>
         </section>
 
         <section class="metric-grid">
